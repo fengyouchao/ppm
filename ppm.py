@@ -43,7 +43,7 @@ def show_usage():
     find [account_name]    Find an account by name
     create                 Create new account
     remove [account_name]  Remove an account by name
-    *update [account_name]  Update an account
+    update [account_name]  Update an account
     passwd                 Change store password
     genpass                Generate a random string
     help/-h/--help         show help
@@ -51,11 +51,11 @@ def show_usage():
   Options:
     -s <store_path>        Store path, default "~/.ppm.store"
     -p <password>          password for store
+    --name <new_name>      set a new name for an account in command [update]
+    --username <username>  set a new username for an account in command [update]
+    --password <password>  set a new password for an account in command [update]
+    --remark   <remark>    set a new remark for an account in command [update]
     -f                     Force to do some dangerous commands with no warning
-    --name                 set a new name for an account in command [update]
-    --username             set a new username for an account in command [update]
-    --password             set a new password for an account in command [update]
-    --remark               set a new remark for an account in command [update]
 
 More: https://github.com/fengyouchao/ppm
     """
@@ -214,16 +214,15 @@ class DataProtector(object):
 
 
 if __name__ == '__main__':
-    sec_path = os.path.expanduser('~/.pm.sec')
     if len(sys.argv) < 2:
         show_usage()
         sys.exit(0)
     command = sys.argv[1]
 
     if command == 'list':
-        pm_password = require_pwd()
+        store_password = require_pwd()
         value = get_command_value()
-        manager = new_account_manager(pm_password)
+        manager = new_account_manager(store_password)
         if value:
             account = manager.find(value)
             if account:
@@ -234,8 +233,8 @@ if __name__ == '__main__':
                 print account
 
     elif command == 'create':
-        pm_password = require_pwd()
-        manager = new_account_manager(pm_password)
+        store_password = require_pwd()
+        manager = new_account_manager(store_password)
         ac_name = raw_input("Name for new account: ")
         while manager.exist(ac_name):
             ac_name = raw_input("[%s] already exist, change new name: ")
@@ -246,9 +245,9 @@ if __name__ == '__main__':
         print "Create record success!"
 
     elif command == 'find':
-        pm_password = require_pwd()
+        store_password = require_pwd()
         account_name = require_name()
-        manager = new_account_manager(pm_password)
+        manager = new_account_manager(store_password)
         account = manager.find(account_name)
         if account:
             print account
@@ -256,16 +255,16 @@ if __name__ == '__main__':
             print "No account named [%s]" % account_name
 
     elif command == 'search':
-        pm_password = require_pwd()
+        store_password = require_pwd()
         search_keyword = require_keyword()
-        manager = new_account_manager(pm_password)
+        manager = new_account_manager(store_password)
         accounts = manager.search(search_keyword)
         for account in accounts:
             print account
 
     elif command == 'update':
-        pm_password = require_pwd()
-        manager = new_account_manager(pm_password)
+        store_password = require_pwd()
+        manager = new_account_manager(store_password)
         account_name = require_name()
         account = manager.find(account_name)
         if account:
@@ -286,13 +285,13 @@ if __name__ == '__main__':
             if update_remark:
                 account.set_remark(update_remark)
             if has_arg('-f'):
-                manager.persist(pm_password)
+                manager.persist(store_password)
                 print 'Account updated successfully'
             else:
                 print account
                 answer = raw_input('Are you sure to update?[Y/N]: ')
-                if answer == 'y':
-                    manager.persist(pm_password)
+                if answer == 'y' or answer == 'Y':
+                    manager.persist(store_password)
                     print 'Account updated successfully'
                 else:
                     print 'Account unchanged'
@@ -300,9 +299,9 @@ if __name__ == '__main__':
             print 'No account named [%s]' % account_name
 
     elif command == 'remove':
-        pm_password = require_pwd()
+        store_password = require_pwd()
         account_name = require_name()
-        manager = new_account_manager(pm_password)
+        manager = new_account_manager(store_password)
         account = manager.find(account_name)
         if account:
             if has_arg('-f'):
@@ -310,13 +309,13 @@ if __name__ == '__main__':
             else:
                 print account
                 answer = raw_input("Are sure remove this account?[Y/N]: ")
-                if answer == 'y':
+                if answer == 'y' or answer == 'Y':
                     manager.remove(account)
 
     elif command == 'passwd':
         print "Changing password for store [%s]" % get_store()
-        pm_password = require_pwd(msg="(current) password: ")
-        manager = new_account_manager(pm_password)
+        store_password = require_pwd(msg="(current) password: ")
+        manager = new_account_manager(store_password)
         new_password1 = getpass.getpass("New password: ")
         new_password2 = getpass.getpass("Retype new password:")
         if new_password1 == new_password2:
@@ -332,4 +331,3 @@ if __name__ == '__main__':
         print 'Account updated successfully'
         print "Unknown command[%s]" % command
         sys.exit(-1)
-
