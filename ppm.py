@@ -49,6 +49,7 @@ def show_usage():
     genpass                Generate a random string
     reset                  Reset ppm, delete store file. If you forget password for store
                            This command will reset ppm but it will delete all data
+    upgrade                Upgrade PPM
     help/-h/--help         show help
 
   Options:
@@ -147,6 +148,12 @@ def new_account_manager(password):
     except Exception, e:
         print "Wrong password"
         sys.exit(-1)
+
+
+def upgrade():
+    os.chdir(os.path.dirname(sys.argv[0]))
+    os.system('git checkout .')
+    os.system('git pull origin master')
 
 
 class Account(object):
@@ -358,6 +365,8 @@ if __name__ == '__main__':
         store_path = get_store()
         if has_arg('-f') or confirm("Are you sure to reset store [%s]? [Y/N]: " % store_path):
             os.remove(store_path)
+    elif command == 'upgrade':
+        upgrade()
     elif command == 'help' or command == '-h' or command == '--help':
         show_usage()
     else:
