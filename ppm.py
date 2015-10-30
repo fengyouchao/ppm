@@ -1,15 +1,36 @@
 #!/usr/bin/env python
+from __future__ import unicode_literals
+from Crypto.Cipher import AES
+from prompt_toolkit import prompt
+from prompt_toolkit.history import FileHistory
+from prompt_toolkit.contrib.completers import WordCompleter
+from prompt_toolkit.key_binding.manager import KeyBindingManager
+from prompt_toolkit.keys import Keys
+from prompt_toolkit.filters import Condition
 import hashlib
 import random
 import string
 import getpass
-from Crypto.Cipher import AES
 import sys
 import pickle
 import os
 
+command_completer = WordCompleter([
+    'list',
+    'create',
+    'update',
+    'remove',
+    'reset',
+    'passwd',
+    'find',
+    'genpass',
+    'exit',
+    'help'
+], ignore_case=True)
+
 default_chars = 'abcdefghijklmnopqrstuvwxyz1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ!@#$%^&*()'
 default_path = os.path.expanduser('~/.ppm.store')
+ppm_shell_history = os.path.expanduser('~/.ppm.history')
 BS = AES.block_size
 
 
@@ -41,7 +62,7 @@ def show_usage():
   Command:
     list [account_name]    List accounts
     find [account_name]    Find an account by name
-    create [name:username:password:remark[]
+    create [name:username:password:remark]
                            Create new account
     remove [account_name]  Remove an account by name
     update [account_name]  Update an account
@@ -91,7 +112,15 @@ def require_pwd(args=sys.argv, msg='Password: '):
     if _password:
         return _password
     else:
-        return getpass.getpass(msg)
+        hidden = [True]
+        pwd_key_bindings_manager = KeyBindingManager()
+
+        @pwd_key_bindings_manager.registry.add_binding(Keys.ControlT)
+        def _(event):
+            hidden[0] = not hidden[0]
+
+        return prompt('Password: ', is_password=Condition(lambda cli: hidden[0]),
+                      key_bindings_registry=pwd_key_bindings_manager.registry)
 
 
 def value_of_arg(arg, args=sys.argv, default=None):
@@ -233,6 +262,40 @@ class DataProtector(object):
         return unpad(self.__aes__.decrypt(ciphertext))
 
 
+def run_shell():
+    ppm_password = require_pwd()
+    ppm_manager = new_account_manager(ppm_password)
+
+    shell_history = FileHistory(ppm_shell_history)
+    key_bindings_manager = KeyBindingManager.for_prompt()
+
+    @key_bindings_manager.registry.add_binding('c', 't')
+    def _(event):
+        if len(event.cli.current_buffer.text) == 0:
+            event.cli.current_buffer.insert_text('create ')
+
+    @key_bindings_manager.registry.add_binding('l', 's')
+    def _(event):
+        if len(event.cli.current_buffer.text) == 0:
+            event.cli.current_buffer.insert_text('list ')
+
+    @key_bindings_manager.registry.add_binding('e', 't')
+    def _(event):
+        if len(event.cli.current_buffer.text) == 0:
+            event.cli.current_buffer.insert_text('exit')
+
+    @key_bindings_manager.registry.add_binding('r', 'm')
+    def _(event):
+        if len(event.cli.current_buffer.text) == 0:
+            event.cli.current_buffer.insert_text('remove ')
+
+    while True:
+        text = prompt(">> ", completer=command_completer, history=shell_history,
+                      key_bindings_registry=key_bindings_manager.registry)
+        if text == 'exit':
+            sys.exit(0)
+
+
 if __name__ == '__main__':
     if len(sys.argv) < 2:
         show_usage()
@@ -369,6 +432,8 @@ if __name__ == '__main__':
         upgrade()
     elif command == 'help' or command == '-h' or command == '--help':
         show_usage()
+    elif command == 'shell':
+        run_shell()
     else:
         print 'Account updated successfully'
         print "Unknown command[%s]" % command
