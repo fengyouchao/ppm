@@ -7,6 +7,15 @@ from prompt_toolkit.contrib.completers import WordCompleter
 from prompt_toolkit.key_binding.manager import KeyBindingManager
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.filters import Condition
+from prompt_toolkit.contrib.regular_languages.compiler import compile
+from prompt_toolkit.contrib.regular_languages.completion import GrammarCompleter
+from prompt_toolkit.contrib.regular_languages.lexer import GrammarLexer
+from prompt_toolkit.layout.lexers import SimpleLexer
+from pygments.token import Token
+from prompt_toolkit.styles import DefaultStyle, PygmentsStyle
+from prompt_toolkit.validation import Validator, ValidationError
+from prompt_toolkit import prompt, AbortAction
+from prettytable import PrettyTable
 import hashlib
 import random
 import string
@@ -15,18 +24,21 @@ import sys
 import pickle
 import os
 
-command_completer = WordCompleter([
+update_options = ['--name', '--username', '--password', '--remark']
+
+shell_commands = [
     'list',
     'create',
+    'search',
     'update',
+    'update-pwd',
     'remove',
     'reset',
     'passwd',
-    'find',
     'genpass',
     'exit',
     'help'
-], ignore_case=True)
+]
 
 default_chars = 'abcdefghijklmnopqrstuvwxyz1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ!@#$%^&*()'
 default_path = os.path.expanduser('~/.ppm.store')
@@ -68,6 +80,7 @@ def show_usage():
     update [account_name]  Update an account
     passwd [new_password]  Change store password
     genpass                Generate a random string
+    shell                  Run an interactive shell
     reset                  Reset ppm, delete store file. If you forget password for store
                            This command will reset ppm but it will delete all data
     upgrade                Upgrade PPM
@@ -107,23 +120,27 @@ def dump(data, password, path=default_path):
         pm_file.write(encrypted_text)
 
 
+def input_pwd(msg='Password:'):
+    hidden = [True]
+    pwd_key_bindings_manager = KeyBindingManager()
+
+    @pwd_key_bindings_manager.registry.add_binding(Keys.ControlT)
+    def _(event):
+        hidden[0] = not hidden[0]
+
+    return prompt(msg, is_password=Condition(lambda cli: hidden[0]),
+                  key_bindings_registry=pwd_key_bindings_manager.registry)
+
+
 def require_pwd(args=sys.argv, msg='Password: '):
-    _password = value_of_arg('-p', args)
+    _password = find_arg_value('-p', args)
     if _password:
         return _password
     else:
-        hidden = [True]
-        pwd_key_bindings_manager = KeyBindingManager()
-
-        @pwd_key_bindings_manager.registry.add_binding(Keys.ControlT)
-        def _(event):
-            hidden[0] = not hidden[0]
-
-        return prompt('Password: ', is_password=Condition(lambda cli: hidden[0]),
-                      key_bindings_registry=pwd_key_bindings_manager.registry)
+        return input_pwd()
 
 
-def value_of_arg(arg, args=sys.argv, default=None):
+def find_arg_value(arg, args=sys.argv, default=None):
     for i in range(len(args)):
         if args[i] == arg and len(args) > i + 1:
             return args[i + 1]
@@ -168,7 +185,7 @@ def get_all_accounts(password, store_path=default_path):
 
 
 def get_store():
-    return value_of_arg('-s', default=default_path)
+    return find_arg_value('-s', default=default_path)
 
 
 def new_account_manager(password):
@@ -244,8 +261,15 @@ class AccountManager(object):
         self.accounts.append(new_account)
         self.persist(self.password)
 
-    def change_pwd(self, new_password):
-        self.persist(new_password)
+    def get_all_name(self):
+        all_accounts = self.get_all()
+        all_names = []
+        for ac in all_accounts:
+            all_names.append(ac.name)
+        return all_names
+
+    def change_pwd(self, new_pwd):
+        self.persist(new_pwd)
 
     def persist(self, password):
         dump(self.accounts, password, path=self.store_path)
@@ -262,22 +286,131 @@ class DataProtector(object):
         return unpad(self.__aes__.decrypt(ciphertext))
 
 
+class AccountNameExistValidator(Validator):
+    def __init__(self, account_manager):
+        self.manager = account_manager
+
+    def validate(self, document):
+        name = document.text
+        if self.manager.exist(name):
+            raise ValidationError(message='Account name [%s] already exists' % name,
+                                  cursor_position=len(document.text))  # Move cursor to end of input.
+
+
+def show_accounts(accounts):
+    x = PrettyTable(['Name', 'Username', 'Password', 'Remark'])
+    x.align['Name'] = 1
+    x.padding_width = 1
+    if not isinstance(accounts, list):
+        accounts = [accounts]
+    for account in accounts:
+        x.add_row([account.name, account.username, account.password, account.remark])
+    print x
+
+
+def do_list(account_manager, target=None):
+    if target:
+        ac = account_manager.find(target)
+        if ac:
+            show_accounts(ac)
+    else:
+        all_accounts = account_manager.get_all()
+        show_accounts(all_accounts)
+
+
+def do_create(account_manager):
+    try:
+        name = prompt('Enter name for new account: ', validator=AccountNameExistValidator(account_manager))
+        username = prompt("Enter username for [%s]: " % name)
+        password = input_pwd("Enter password for [%s]: " % name)
+        retype_password = input_pwd("Retype password: ")
+        while password != retype_password:
+            print "Password do not match, try again"
+            password = input_pwd("Enter password for [%s]: " % name)
+            retype_password = input_pwd("Retype password: ")
+        remark = prompt("Enter remark: ")
+        account_manager.add_account(Account(name, username, password, remark))
+        print "Create new account successfully!"
+
+    except KeyboardInterrupt, e:
+        print 'Command [create] canceled'
+        return
+
+
+def do_search(account_manager, keyword):
+    accounts = account_manager.search(keyword)
+    show_accounts(accounts)
+
+
+def do_remove(account_manager, target, force=False):
+    account = account_manager.find(target)
+    if force:
+        account_manager.remove(account)
+    else:
+        print account
+        if confirm("Are you sure to remove account named [%s] [Y/N]: " % target):
+            account_manager.remove(account)
+
+
+def do_update(account_manager, target=None, new_name=None, new_username=None, new_pwd=None, new_remark=None,
+              force=False):
+    pass
+
+
+def create_grammar():
+    return compile("""
+        (\s*(?P<command>create|help)  (\s+ (?P<value>[\w0-9]+))?    \s+  (?P<option>[\-\w0-9.]+)   \s*) |
+        (\s*(?P<command>list)   (\s+ (?P<accountName>[\w0-9]+))?  \s*)  |
+        (\s*(?P<command>remove)   \s+ (?P<accountName>[\w0-9]+) (\s+(?P<force>-f))?  \s*) |
+        (\s*(?P<command>update)  \s+ (?P<accountName>[\w0-9]+)
+             (\s+ (?P<updateOption>--name|--username|--password|--remark) \s+ (?P<updateValue>\S+) )+ (\s+(?P<force>-f))? \s*) |
+        (\s*(?P<command>search)  \s+ (?P<keyword>[\w0-9]+) \s*) |
+        (\s*(?P<command>exit) \s*) |
+        (\s*(?P<command>reset) \s*) |
+        (\s*(?P<command>create) \s*) |
+        (\s*(?P<command>help) \s*)
+    """)
+
+
+class CommandStyle(DefaultStyle):
+    styles = {}
+    styles.update(DefaultStyle.styles)
+    styles.update({
+        Token.Command: '#33aa33 bold',
+        Token.Value: '#aa3333 bold',
+        Token.Option: '#aa1333 bold',
+        Token.OptionValue: '#aa8383 bold',
+        Token.TrailingInput: 'bg:#662222 #ffffff',
+    })
+
+
 def run_shell():
     ppm_password = require_pwd()
-    ppm_manager = new_account_manager(ppm_password)
-
+    account_manager = new_account_manager(ppm_password)
     shell_history = FileHistory(ppm_shell_history)
     key_bindings_manager = KeyBindingManager.for_prompt()
+
+    g = create_grammar()
+    lexer = GrammarLexer(g, lexers={
+        'command': SimpleLexer(Token.Command),
+        'value': SimpleLexer(Token.Value),
+        'accountName': SimpleLexer(Token.Value),
+        'force': SimpleLexer(Token.Option),
+        'option': SimpleLexer(Token.Option),
+        'updateOption': SimpleLexer(Token.Option),
+        'updateValue': SimpleLexer(Token.OptionValue),
+        'keyword': SimpleLexer(Token.Value)
+    })
 
     @key_bindings_manager.registry.add_binding('c', 't')
     def _(event):
         if len(event.cli.current_buffer.text) == 0:
-            event.cli.current_buffer.insert_text('create ')
+            event.cli.current_buffer.insert_text('create')
 
     @key_bindings_manager.registry.add_binding('l', 's')
     def _(event):
         if len(event.cli.current_buffer.text) == 0:
-            event.cli.current_buffer.insert_text('list ')
+            event.cli.current_buffer.insert_text('list')
 
     @key_bindings_manager.registry.add_binding('e', 't')
     def _(event):
@@ -287,16 +420,50 @@ def run_shell():
     @key_bindings_manager.registry.add_binding('r', 'm')
     def _(event):
         if len(event.cli.current_buffer.text) == 0:
-            event.cli.current_buffer.insert_text('remove ')
+            event.cli.current_buffer.insert_text('remove')
+
+    @key_bindings_manager.registry.add_binding('p', 'w', 'd')
+    def _(event):
+        if len(event.cli.current_buffer.text) == 0:
+            event.cli.current_buffer.insert_text('passwd')
 
     while True:
-        text = prompt(">> ", completer=command_completer, history=shell_history,
-                      key_bindings_registry=key_bindings_manager.registry)
-        if text == 'exit':
-            sys.exit(0)
+
+        completer = GrammarCompleter(g, {
+            'command': WordCompleter(shell_commands),
+            'accountName': WordCompleter(account_manager.get_all_name()),
+            'force': WordCompleter(['-f']),
+            'updateOption': WordCompleter(update_options),
+        })
+        text = prompt(">> ", history=shell_history,
+                      key_bindings_registry=key_bindings_manager.registry, lexer=lexer, completer=completer,
+                      style=PygmentsStyle(CommandStyle), on_abort=AbortAction.RETRY)
+        m = g.match(text)
+        if m:
+            _vars = m.variables()
+            command = _vars.get('command')
+            if command == 'list':
+                target = _vars.get('accountName')
+                do_list(account_manager, target=target)
+            elif command == 'create':
+                do_create(account_manager)
+            elif command == 'remove':
+                target = _vars.get('accountName')
+                force_option = _vars.get('force')
+                do_remove(account_manager, target=target, force=force_option)
+            elif command == 'update':
+                target = _vars.get('accountName')
+                force_option = _vars.get('force')
+            elif command == 'search':
+                keyword = _vars.get('keyword')
+                do_search(account_manager, keyword=keyword)
+            elif command == 'exit':
+                sys.exit(0)
+        else:
+            print "Command Error"
 
 
-if __name__ == '__main__':
+def main():
     if len(sys.argv) < 2:
         show_usage()
         sys.exit(0)
@@ -309,11 +476,10 @@ if __name__ == '__main__':
         if value:
             account = manager.find(value)
             if account:
-                print account
+                show_accounts([account])
         else:
             accounts = manager.get_all()
-            for account in accounts:
-                print account
+            show_accounts(accounts)
 
     elif command == 'create':
         store_password = require_pwd()
@@ -365,20 +531,20 @@ if __name__ == '__main__':
         account_name = require_name()
         account = manager.find(account_name)
         if account:
-            update_name = value_of_arg('--name')
+            update_name = find_arg_value('--name')
             print update_name
             if update_name and update_name != account_name:
                 if manager.exist(update_name):
                     print "Account name [%s] already exists" % update_name
                     sys.exit(-1)
                 account.set_name(update_name)
-            update_username = value_of_arg('--username')
+            update_username = find_arg_value('--username')
             if update_username:
                 account.set_username(update_username)
-            update_password = value_of_arg('--password')
+            update_password = find_arg_value('--password')
             if update_password:
                 account.set_password(update_password)
-            update_remark = value_of_arg('--remark')
+            update_remark = find_arg_value('--remark')
             if update_remark:
                 account.set_remark(update_remark)
             if has_arg('-f'):
@@ -438,3 +604,7 @@ if __name__ == '__main__':
         print 'Account updated successfully'
         print "Unknown command[%s]" % command
         sys.exit(-1)
+
+
+if __name__ == '__main__':
+    main()
