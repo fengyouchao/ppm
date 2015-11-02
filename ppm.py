@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 from __future__ import unicode_literals
 from Crypto.Cipher import AES
-from prompt_toolkit import prompt
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.contrib.completers import WordCompleter
 from prompt_toolkit.contrib.completers import PathCompleter
@@ -35,6 +34,7 @@ shell_commands = [
     'remove',
     'password',
     'switch',
+    'where',
     'exit',
     'help'
 ]
@@ -318,14 +318,17 @@ class AccountNameExistValidator(Validator):
 
 
 def show_accounts(accounts):
-    x = PrettyTable(['Name', 'Username', 'Password', 'Remark'])
-    x.align['Name'] = 1
+    x = PrettyTable(['No', 'Name', 'Username', 'Password', 'Remark'])
+    x.align['No'] = 1
     x.padding_width = 1
     if not isinstance(accounts, list):
         accounts = [accounts]
+    no = 1
     for account in accounts:
-        x.add_row([account.name, account.username, account.password, account.remark])
-    print x
+        x.add_row([no, account.name, account.username, account.password, account.remark])
+        no += 1
+    if len(accounts) > 0:
+        print x
 
 
 def do_list(account_manager, target=None):
@@ -434,15 +437,16 @@ def do_update(account_manager, target, field, force=False):
 def do_help():
     print """Usage: Command <values> [Options]
 Command:
-    list [accountName]             List all accounts or a specified account
+    list [accountName]             List all accounts or a specified account.
     create                         Create an account.
     update <accountName> <name|username|password|remark> [-f]
                                    Update a exist account.
     remove <accountName] [-f]      Remove a specified account. Using [-f] to remove account with no warning.
     search <keyword>               Search accounts by a keyword.
     password [storePath]           Change current store's password or change a specified  store's password.
-    switch <storePath>             Switch to a specified store
-    exit                           Exit
+    switch <storePath>             Switch to a specified store.
+    where                          Show current store path.
+    exit                           Exit.
     help                           Show help.
 
 Options:
@@ -455,6 +459,8 @@ Shortcut Key:
     rm = remove
     sh = search
     pw = password
+    st = switch
+    we = where
     et = exit
     hp = help
     """
@@ -469,8 +475,8 @@ def create_grammar():
         (\s*(?P<command>search)  \s+ (?P<keyword>[\w0-9]+) \s*) |
         (\s*(?P<command>password)  (\s+ (?P<path>~?[\w0-9\./_-]+))? \s*) |
         (\s*(?P<command>switch)  \s+ (?P<path>~?[\w0-9\./_-]+) \s*) |
+        (\s*(?P<command>where) \s*) |
         (\s*(?P<command>exit) \s*) |
-        (\s*(?P<command>reset) \s*) |
         (\s*(?P<command>create) \s*) |
         (\s*(?P<command>help) \s*)
     """)
@@ -537,6 +543,11 @@ def run_shell():
         if len(event.cli.current_buffer.text) == 0:
             event.cli.current_buffer.insert_text('switch')
 
+    @key_bindings_manager.registry.add_binding('w', 'e')
+    def _(event):
+        if len(event.cli.current_buffer.text) == 0:
+            event.cli.current_buffer.insert_text('where')
+
     @key_bindings_manager.registry.add_binding('u', 'd')
     def _(event):
         if len(event.cli.current_buffer.text) == 0:
@@ -596,6 +607,8 @@ def run_shell():
                     account_manager = do_switch(store_path)
                 except Exception, e:
                     print "ERROR: Wrong password!"
+            elif command == 'where':
+                print account_manager.get_store_path()
             elif command == 'exit':
                 sys.exit(0)
             elif command == 'help':
