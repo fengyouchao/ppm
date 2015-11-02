@@ -4,6 +4,7 @@ from Crypto.Cipher import AES
 from prompt_toolkit import prompt
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.contrib.completers import WordCompleter
+from prompt_toolkit.contrib.completers import PathCompleter
 from prompt_toolkit.key_binding.manager import KeyBindingManager
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.filters import Condition
@@ -24,24 +25,22 @@ import sys
 import pickle
 import os
 
-update_options = ['--name', '--username', '--password', '--remark']
+update_options = ['name', 'username', 'password', 'remark']
 
 shell_commands = [
     'list',
     'create',
     'search',
     'update',
-    'update-pwd',
     'remove',
-    'reset',
-    'passwd',
-    'genpass',
+    'password',
+    'switch',
     'exit',
     'help'
 ]
 
 default_chars = 'abcdefghijklmnopqrstuvwxyz1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ!@#$%^&*()'
-default_path = os.path.expanduser('~/.ppm.store')
+default_store_path = os.path.expanduser('~/.ppm.store')
 ppm_shell_history = os.path.expanduser('~/.ppm.history')
 BS = AES.block_size
 
@@ -101,7 +100,7 @@ More: https://github.com/fengyouchao/ppm
     """
 
 
-def load(password, path=default_path, default=None):
+def load(password, path=default_store_path, default=None):
     data_protector = DataProtector(password)
     if os.path.exists(path):
         with open(path, 'rb') as pm_file:
@@ -112,7 +111,7 @@ def load(password, path=default_path, default=None):
         return default
 
 
-def dump(data, password, path=default_path):
+def dump(data, password, path=default_store_path):
     text = pickle.dumps(data)
     data_protector = DataProtector(password)
     encrypted_text = data_protector.encrypt(text)
@@ -180,12 +179,12 @@ def confirm(msg):
         return False
 
 
-def get_all_accounts(password, store_path=default_path):
+def get_all_accounts(password, store_path=default_store_path):
     return load(password, path=store_path, default=[])
 
 
 def get_store():
-    return find_arg_value('-s', default=default_path)
+    return find_arg_value('-s', default=default_store_path)
 
 
 def new_account_manager(password):
@@ -221,19 +220,39 @@ class Account(object):
     def set_remark(self, remark):
         self.remark = remark
 
+    def copy(self):
+        return Account(self.name, self.username, self.password, self.remark)
+
+    def copy_from(self, source):
+        self.name = source.name
+        self.username = source.username
+        self.password = source.password
+        self.remark = source.remark
+
     def __repr__(self):
         return "{\"name\":\"%s\", \"username\":\"%s\", \"password\":\"%s\", \"remark\":\"%s\"}" % (
             self.name, self.username, self.password, self.remark)
 
 
 class AccountManager(object):
-    def __init__(self, password, store_path=default_path):
+    def __init__(self, password, store_path=default_store_path):
         self.password = password
         self.store_path = store_path
         self.accounts = get_all_accounts(password, self.store_path)
 
+    def get_store_path(self):
+        return self.store_path
+
+    def get_password(self):
+        return self.password
+
     def get_all(self):
         return self.accounts
+
+    def update(self, name, updated_account):
+        account = self.find(name)
+        account.copy_from(updated_account)
+        self.persist(self.password)
 
     def find(self, name):
         for _account in self.accounts:
@@ -269,6 +288,7 @@ class AccountManager(object):
         return all_names
 
     def change_pwd(self, new_pwd):
+        self.password = new_pwd
         self.persist(new_pwd)
 
     def persist(self, password):
@@ -333,7 +353,7 @@ def do_create(account_manager):
         print "Create new account successfully!"
 
     except KeyboardInterrupt, e:
-        print 'Command [create] canceled'
+        print 'Command [create] canceled!'
         return
 
 
@@ -347,24 +367,108 @@ def do_remove(account_manager, target, force=False):
     if force:
         account_manager.remove(account)
     else:
-        print account
-        if confirm("Are you sure to remove account named [%s] [Y/N]: " % target):
+        show_accounts(account)
+        if confirm("Are you sure to remove this account? [Y/N]: "):
             account_manager.remove(account)
 
 
-def do_update(account_manager, target=None, new_name=None, new_username=None, new_pwd=None, new_remark=None,
-              force=False):
-    pass
+def do_password(account_manager, store_path=default_store_path):
+    old = input_pwd('Enter current password for store [%s]: ' % store_path)
+    try:
+        manager = AccountManager(old, store_path=store_path)
+        new = input_pwd('Enter new password for store [%s]: ' % store_path)
+        retype = input_pwd("Retype password: ")
+        i = 0
+        while new != retype and i < 2:
+            print "Sorry, password not match!"
+            new = input_pwd('Enter new password for store [%s]: ' % store_path)
+            retype = input_pwd("Retype password: ")
+            i += 1
+        if new == retype:
+            manager.change_pwd(new)
+            if manager.get_store_path() == account_manager.get_store_path():
+                return manager
+            else:
+                return account_manager
+        else:
+            print "Change password failed!"
+        return account_manager
+
+    except Exception, e:
+        print "ERROR: Wrong password!"
+        return account_manager
+
+
+def do_switch(store_path):
+    password = input_pwd("Enter password for store [%s]: " % store_path)
+    return AccountManager(password, store_path)
+
+
+def do_update(account_manager, target, field, force=False):
+    account = account_manager.find(target)
+    if account:
+        try:
+            updated_account = account.copy()
+            if field == 'username':
+                new_username = prompt("Enter new username: ")
+                updated_account.username = new_username
+            elif field == 'password':
+                new_password = input_pwd('Enter new password for account [%s]: ' % target)
+                updated_account.password = new_password
+            elif field == 'remark':
+                new_remark = prompt('Enter new remark: ')
+                updated_account.remark = new_remark
+            elif field == 'name':
+                new_name = prompt('Enter new name: ', validator=AccountNameExistValidator(account_manager))
+                updated_account.name = new_name
+            show_accounts(updated_account)
+            if force or confirm('Are you sure to update this account? [Y/N]: '):
+                account_manager.update(target, updated_account)
+                print 'Update successfully!'
+        except KeyboardInterrupt, e:
+            print "Command [update] canceled!"
+    else:
+        print 'No such account named [%s]' % target
+
+
+def do_help():
+    print """Usage: Command <values> [Options]
+Command:
+    list [accountName]             List all accounts or a specified account
+    create                         Create an account.
+    update <accountName> <name|username|password|remark> [-f]
+                                   Update a exist account.
+    remove <accountName] [-f]      Remove a specified account. Using [-f] to remove account with no warning.
+    search <keyword>               Search accounts by a keyword.
+    password [storePath]           Change current store's password or change a specified  store's password.
+    switch <storePath>             Switch to a specified store
+    exit                           Exit
+    help                           Show help.
+
+Options:
+    -f                           Do some commands with no warning.
+
+Shortcut Key:
+    ls = list
+    ct = create
+    ud = update
+    rm = remove
+    sh = search
+    pw = password
+    et = exit
+    hp = help
+    """
 
 
 def create_grammar():
     return compile("""
-        (\s*(?P<command>create|help)  (\s+ (?P<value>[\w0-9]+))?    \s+  (?P<option>[\-\w0-9.]+)   \s*) |
         (\s*(?P<command>list)   (\s+ (?P<accountName>[\w0-9]+))?  \s*)  |
         (\s*(?P<command>remove)   \s+ (?P<accountName>[\w0-9]+) (\s+(?P<force>-f))?  \s*) |
-        (\s*(?P<command>update)  \s+ (?P<accountName>[\w0-9]+)
-             (\s+ (?P<updateOption>--name|--username|--password|--remark) \s+ (?P<updateValue>\S+) )+ (\s+(?P<force>-f))? \s*) |
+        (\s*(?P<command>update)  \s+ (?P<accountName>[\w0-9\.]+)
+             \s+ (?P<updateOption>name|username|password|remark) (\s+(?P<force>-f))? \s*) |
         (\s*(?P<command>search)  \s+ (?P<keyword>[\w0-9]+) \s*) |
+        (\s*(?P<command>password)  (\s+ (?P<path>~?[\w0-9\./_-]+))? \s*) |
+        (\s*(?P<command>switch)  \s+ (?P<path>~?[\w0-9\./_-]+) \s*) |
         (\s*(?P<command>exit) \s*) |
         (\s*(?P<command>reset) \s*) |
         (\s*(?P<command>create) \s*) |
@@ -399,7 +503,8 @@ def run_shell():
         'option': SimpleLexer(Token.Option),
         'updateOption': SimpleLexer(Token.Option),
         'updateValue': SimpleLexer(Token.OptionValue),
-        'keyword': SimpleLexer(Token.Value)
+        'keyword': SimpleLexer(Token.Value),
+        'path': SimpleLexer(Token.Value),
     })
 
     @key_bindings_manager.registry.add_binding('c', 't')
@@ -422,10 +527,30 @@ def run_shell():
         if len(event.cli.current_buffer.text) == 0:
             event.cli.current_buffer.insert_text('remove')
 
-    @key_bindings_manager.registry.add_binding('p', 'w', 'd')
+    @key_bindings_manager.registry.add_binding('p', 'w')
     def _(event):
         if len(event.cli.current_buffer.text) == 0:
-            event.cli.current_buffer.insert_text('passwd')
+            event.cli.current_buffer.insert_text('password')
+
+    @key_bindings_manager.registry.add_binding('s', 't')
+    def _(event):
+        if len(event.cli.current_buffer.text) == 0:
+            event.cli.current_buffer.insert_text('switch')
+
+    @key_bindings_manager.registry.add_binding('u', 'd')
+    def _(event):
+        if len(event.cli.current_buffer.text) == 0:
+            event.cli.current_buffer.insert_text('update')
+
+    @key_bindings_manager.registry.add_binding('s', 'h')
+    def _(event):
+        if len(event.cli.current_buffer.text) == 0:
+            event.cli.current_buffer.insert_text('search')
+
+    @key_bindings_manager.registry.add_binding('h', 'p')
+    def _(event):
+        if len(event.cli.current_buffer.text) == 0:
+            event.cli.current_buffer.insert_text('help')
 
     while True:
 
@@ -434,6 +559,7 @@ def run_shell():
             'accountName': WordCompleter(account_manager.get_all_name()),
             'force': WordCompleter(['-f']),
             'updateOption': WordCompleter(update_options),
+            'path': PathCompleter(),
         })
         text = prompt(">> ", history=shell_history,
                       key_bindings_registry=key_bindings_manager.registry, lexer=lexer, completer=completer,
@@ -453,14 +579,29 @@ def run_shell():
                 do_remove(account_manager, target=target, force=force_option)
             elif command == 'update':
                 target = _vars.get('accountName')
+                update_option = _vars.get('updateOption')
                 force_option = _vars.get('force')
+                do_update(account_manager, target=target, field=update_option, force=force_option)
             elif command == 'search':
                 keyword = _vars.get('keyword')
                 do_search(account_manager, keyword=keyword)
+            elif command == 'password':
+                store_path = _vars.get('path')
+                if not store_path:
+                    store_path = default_store_path
+                account_manager = do_password(account_manager, store_path=store_path)
+            elif command == 'switch':
+                store_path = _vars.get('path')
+                try:
+                    account_manager = do_switch(store_path)
+                except Exception, e:
+                    print "ERROR: Wrong password!"
             elif command == 'exit':
                 sys.exit(0)
+            elif command == 'help':
+                do_help()
         else:
-            print "Command Error"
+            print 'ERROR: Command error!'
 
 
 def main():
