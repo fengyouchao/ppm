@@ -755,7 +755,6 @@ def main():
     elif command == 'shell':
         run_shell()
     else:
-        print 'Account updated successfully'
         print "Unknown command[%s]" % command
         sys.exit(-1)
 
