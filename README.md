@@ -5,3 +5,11 @@
 # Environment
 
 Python 2.7
+
+# Install
+
+```
+git clone https://github.com/fengyouchao/ppm.git
+cd ppm
+python setup.py install
+```
